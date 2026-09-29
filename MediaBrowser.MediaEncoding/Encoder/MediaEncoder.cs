@@ -285,6 +285,49 @@ namespace MediaBrowser.MediaEncoding.Encoder
         }
 
         /// <summary>
+        /// Resolves and sanitizes an encoder executable path to prevent command injection.
+        /// Accepts either a bare filename (resolved via PATH) or an absolute path to an
+        /// existing file. Returns <c>null</c> when the path is invalid or does not exist.
+        /// </summary>
+        /// <param name="path">The raw encoder path from configuration or the database.</param>
+        /// <returns>The sanitized, resolved path; or <c>null</c> if the path is not acceptable.</returns>
+        internal static string? SanitizeEncoderPath(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return null;
+            }
+
+            // If the path contains no directory component it is a bare filename and will
+            // be resolved via the OS PATH — allow it through unchanged.
+            if (string.Equals(path, Path.GetFileName(path), StringComparison.Ordinal))
+            {
+                return path;
+            }
+
+            // Resolve the canonical absolute path using the OS path resolver.
+            // This collapses any ".." sequences and symlinks, preventing path-traversal
+            // payloads from reaching the process spawn.
+            string resolvedPath;
+            try
+            {
+                resolvedPath = Path.GetFullPath(path);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            // Only accept the path when the resolved file actually exists on disk.
+            if (!File.Exists(resolvedPath))
+            {
+                return null;
+            }
+
+            return resolvedPath;
+        }
+
+        /// <summary>
         /// Validates the supplied FQPN to ensure it is a ffmpeg utility.
         /// If checks pass, global variable FFmpegPath is updated.
         /// </summary>
@@ -297,14 +340,23 @@ namespace MediaBrowser.MediaEncoding.Encoder
                 return false;
             }
 
-            bool rc = new EncoderValidator(_logger, path).ValidateVersion();
-            if (!rc)
+            // Sanitize the path at the input boundary to prevent command injection via
+            // tainted values read from configuration or the database (CWE-77).
+            var sanitizedPath = SanitizeEncoderPath(path);
+            if (sanitizedPath is null)
             {
-                _logger.LogError("FFmpeg: Failed version check: {Path}", path);
+                _logger.LogError("FFmpeg: Path is invalid or does not exist: {Path}", path);
                 return false;
             }
 
-            _ffmpegPath = path;
+            bool rc = new EncoderValidator(_logger, sanitizedPath).ValidateVersion();
+            if (!rc)
+            {
+                _logger.LogError("FFmpeg: Failed version check: {Path}", sanitizedPath);
+                return false;
+            }
+
+            _ffmpegPath = sanitizedPath;
             return true;
         }
 
