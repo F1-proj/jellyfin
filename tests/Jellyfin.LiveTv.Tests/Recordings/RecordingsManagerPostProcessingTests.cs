@@ -92,7 +92,27 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------
-    // Security test 2: RecordingPostProcessor set to a non-existent path → the
+    // Security test 2: RecordingPostProcessor set to a relative (non-rooted) path.
+    // The Path.IsPathRooted guard must reject it before Path.GetFullPath is called,
+    // preventing an attacker from referencing a binary relative to the working directory.
+    // ---------------------------------------------------------------------------
+    [Theory]
+    [InlineData("postprocessor.sh")]
+    [InlineData("./scripts/postprocessor.sh")]
+    [InlineData("scripts/../postprocessor.sh")]
+    [InlineData("../escape.sh")]
+    public async Task PostProcessRecording_RelativePath_ReturnsWithoutAction(string relativePath)
+    {
+        _configMock
+            .Setup(c => c.GetConfiguration("livetv"))
+            .Returns(new LiveTvOptions { RecordingPostProcessor = relativePath });
+
+        // Must complete without throwing; relative paths are rejected by IsPathRooted check.
+        await InvokePostProcessRecording(_manager, "/some/recording.ts");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Security test 3 (original): RecordingPostProcessor set to a non-existent path → the
     // File.Exists guard rejects it.  No process is launched.
     // ---------------------------------------------------------------------------
     [Fact]
@@ -109,7 +129,7 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------
-    // Security test 3: path traversal injection attempt.
+    // Security test 4: path traversal injection attempt.
     // A value like "/safe/dir/../../../etc/passwd" is normalised by Path.GetFullPath
     // to an absolute path and then rejected by File.Exists.
     // ---------------------------------------------------------------------------
@@ -128,7 +148,7 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------
-    // Security test 4: a path that exists on disk IS accepted.
+    // Security test 5: a path that exists on disk IS accepted.
     // We create a real file in the temp directory and verify the method proceeds
     // past the validation stage (it will fail to actually execute it as a process,
     // but the important thing is that the validation guard passes for a valid path).
@@ -154,7 +174,7 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------
-    // Security test 5: path normalisation — verify that Path.GetFullPath resolves
+    // Security test 6: path normalisation — verify that Path.GetFullPath resolves
     // ".." segments so the security check is not bypassed through relative notation.
     // ---------------------------------------------------------------------------
     [Fact]
@@ -176,7 +196,7 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------
-    // Security test 6: UseShellExecute must remain false — the ProcessStartInfo
+    // Security test 7: UseShellExecute must remain false — the ProcessStartInfo
     // produced by the fix must not engage a shell interpreter.
     // (Verified by reading the fixed source code logic through the method body
     //  that sets UseShellExecute = false unconditionally.)
