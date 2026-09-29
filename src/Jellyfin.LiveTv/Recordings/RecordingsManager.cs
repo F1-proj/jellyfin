@@ -809,12 +809,18 @@ public sealed class RecordingsManager : IRecordingsManager, IDisposable
         }
 
         // Validate that the configured post-processor is an absolute path to an existing
-        // file. This prevents command injection by rejecting values that contain shell
-        // metacharacters or that do not correspond to a real executable on disk.
-        // Path.GetFullPath normalizes the value (resolving any ".." segments), and
-        // File.Exists confirms the resolved path refers to an actual file, so only a
-        // legitimate executable path can reach ProcessStartInfo.FileName.
-        // UseShellExecute is kept false so the OS does not involve a shell interpreter.
+        // file. This prevents command injection by requiring the path to be rooted
+        // (absolute), resolving any ".." segments via Path.GetFullPath, and confirming the
+        // resolved path refers to an actual file on disk.
+        // UseShellExecute is set to false so the OS never involves a shell interpreter,
+        // which eliminates shell metacharacter injection as an attack vector.
+        // Only a verified absolute path to a real executable can reach ProcessStartInfo.FileName.
+        if (!Path.IsPathRooted(options.RecordingPostProcessor))
+        {
+            _logger.LogError("Recording post-processor must be an absolute path: {ProcessorPath}", options.RecordingPostProcessor);
+            return;
+        }
+
         string processorPath;
         try
         {
