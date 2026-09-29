@@ -841,19 +841,31 @@ public sealed class RecordingsManager : IRecordingsManager, IDisposable
         try
         {
             using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
+
+            // Use ProcessStartInfo with UseShellExecute = false and ArgumentList (argv-based,
+            // not shell-interpreted) to prevent command/argument injection.
+            // The recording path is passed as a discrete argv entry — no shell quoting or
+            // metacharacter expansion occurs.  processorPath has already been verified to be
+            // an absolute path to an existing file (see validation above).
+            var startInfo = new ProcessStartInfo
             {
-                Arguments = options.RecordingPostProcessorArguments
-                    .Replace("{path}", path, StringComparison.OrdinalIgnoreCase),
+                FileName = processorPath,
                 CreateNoWindow = true,
                 ErrorDialog = false,
-                FileName = processorPath,
                 WindowStyle = ProcessWindowStyle.Hidden,
-                UseShellExecute = false
+                UseShellExecute = false,
+                RedirectStandardOutput = false,
+                RedirectStandardError = false,
             };
+
+            // Pass the recording path as a single, isolated argument using ArgumentList so
+            // it is never interpreted by a shell (no metacharacter expansion, no word-splitting).
+            startInfo.ArgumentList.Add(path);
+
+            process.StartInfo = startInfo;
             process.EnableRaisingEvents = true;
 
-            _logger.LogInformation("Running recording post processor {FileName} {Arguments}", process.StartInfo.FileName, process.StartInfo.Arguments);
+            _logger.LogInformation("Running recording post processor {FileName} with recording path {RecordingPath}", processorPath, path);
 
             process.Start();
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);

