@@ -808,6 +808,30 @@ public sealed class RecordingsManager : IRecordingsManager, IDisposable
             return;
         }
 
+        // Validate that the configured post-processor is an absolute path to an existing
+        // file. This prevents command injection by rejecting values that contain shell
+        // metacharacters or that do not correspond to a real executable on disk.
+        // Path.GetFullPath normalizes the value (resolving any ".." segments), and
+        // File.Exists confirms the resolved path refers to an actual file, so only a
+        // legitimate executable path can reach ProcessStartInfo.FileName.
+        // UseShellExecute is kept false so the OS does not involve a shell interpreter.
+        string processorPath;
+        try
+        {
+            processorPath = Path.GetFullPath(options.RecordingPostProcessor);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Invalid recording post-processor path");
+            return;
+        }
+
+        if (!File.Exists(processorPath))
+        {
+            _logger.LogError("Recording post-processor executable not found: {ProcessorPath}", processorPath);
+            return;
+        }
+
         try
         {
             using var process = new Process();
@@ -817,13 +841,13 @@ public sealed class RecordingsManager : IRecordingsManager, IDisposable
                     .Replace("{path}", path, StringComparison.OrdinalIgnoreCase),
                 CreateNoWindow = true,
                 ErrorDialog = false,
-                FileName = options.RecordingPostProcessor,
+                FileName = processorPath,
                 WindowStyle = ProcessWindowStyle.Hidden,
                 UseShellExecute = false
             };
             process.EnableRaisingEvents = true;
 
-            _logger.LogInformation("Running recording post processor {0} {1}", process.StartInfo.FileName, process.StartInfo.Arguments);
+            _logger.LogInformation("Running recording post processor {FileName} {Arguments}", process.StartInfo.FileName, process.StartInfo.Arguments);
 
             process.Start();
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
